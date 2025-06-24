@@ -70,8 +70,8 @@ void* thread_func(void* arg) {
                 pthread_mutex_lock(&mt_count);
                 if (ops >= OPERATIONS) {
                         timestamp_log("operation finished - %d\n", ops);
-                        pthread_mutex_unlock(&mt_count);
                         exit(0);
+                        pthread_mutex_unlock(&mt_count);
                 }
 
                 ops++;

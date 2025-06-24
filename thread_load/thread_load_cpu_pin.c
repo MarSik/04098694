@@ -1,3 +1,9 @@
+#define _GNU_SOURCE
+#include <sched.h>
+#include <stdint.h>
+#include <errno.h>
+#include <string.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -14,6 +20,8 @@ int LOOP_COUNT = 1000;
 int THREAD_SLEEP_US = 1000; // 1ms
 int MAX_MUTEXES;
 int OPERATIONS = 0;
+int CPU_PIN_FIRST_CPU = -1;
+
 volatile int ops = 0;
 
 pid_t pid, wpid;
@@ -45,6 +53,7 @@ void print_usage(const char *prog_name) {
     printf("  -l <LOOP_COUNT>                  Number of CPU loop iterations inside thread (default: 1000)\n");
     printf("  -d <THREAD_SLEEP_US>             Sleep time inside thread function in microseconds (default: 1000)\n");
     printf("  -o <OPERATIONS>                  How much operation will perform per batch(default: unlimit)\n");
+    printf("  -p <FIRST_CPU>                   Use cpu pinning starting with first cpu (default: disabled).\n");
     printf("  -h                               Show this help message\n");
 }
 
@@ -55,6 +64,22 @@ void* thread_func(void* arg) {
     pthread_mutex_t *mutex = &mutexes[index / THREADS_PER_MUTEX];
     free(arg);
 
+    // Pin thread to a specific CPU core
+    if (CPU_PIN_FIRST_CPU >= 0) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+
+        int cpu_id =
+            CPU_PIN_FIRST_CPU +
+            (index % (sysconf(_SC_NPROCESSORS_ONLN) - CPU_PIN_FIRST_CPU));
+        CPU_SET(cpu_id, &cpuset);
+        if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
+            fprintf(stderr, "Warning: Could not set CPU affinity for thread %d: %s\n", index, strerror(errno));
+        } else {
+            printf("Thread %d pinned to cpu %d\n", index, cpu_id);
+        }
+    }
+    
     while (1) {
         pthread_mutex_lock(mutex);
 
@@ -70,8 +95,8 @@ void* thread_func(void* arg) {
                 pthread_mutex_lock(&mt_count);
                 if (ops >= OPERATIONS) {
                         timestamp_log("operation finished - %d\n", ops);
-                        pthread_mutex_unlock(&mt_count);
                         exit(0);
+                        pthread_mutex_unlock(&mt_count);
                 }
 
                 ops++;
@@ -112,7 +137,7 @@ int main(int argc, char *argv[]) {
     int thread_batch_interval_sec = 30;
     int opt;
 
-    while ((opt = getopt(argc, argv, "i:b:m:t:l:d:o:h")) != -1) {
+    while ((opt = getopt(argc, argv, "i:b:m:t:l:d:o:p:h")) != -1) {
         switch (opt) {
             case 'i':
                 thread_batch_interval_sec = atoi(optarg);
@@ -134,6 +159,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'o':
                 OPERATIONS = atoi(optarg);
+                break;
+            case 'p':
+                CPU_PIN_FIRST_CPU = atoi(optarg);
                 break;
             case 'h':
                 print_usage(argv[0]);

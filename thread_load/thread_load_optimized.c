@@ -8,15 +8,20 @@
 #include <errno.h>
 #include <string.h>
 #include <time.h>
+#include <assert.h>
 
-#define THREADS 64
-#define THREADS_PER_MUTEX 4
-#define MUTEX_COUNT (THREADS / THREADS_PER_MUTEX)
-#define LOOP_COUNT 100000
-#define THREAD_SLEEP_US 100
-#define OPERATIONS 100000
+int THREAD_BATCH = 100;
+int MAX_THREADS = 20000;
+int THREADS_PER_MUTEX = 20;
+int LOOP_COUNT = 1000;
+int THREAD_SLEEP_US = 1000; // 1ms
+int MAX_MUTEXES;
+int OPERATIONS = 0;
+int CPU_PIN_FIRST_CPU = -1;
 
-pthread_spinlock_t spinlocks[MUTEX_COUNT];
+#define MUTEX_COUNT (MAX_THREADS / THREADS_PER_MUTEX)
+
+pthread_spinlock_t spinlocks[20000];
 pthread_spinlock_t mt_count;
 
 int ops = 0;
@@ -31,11 +36,19 @@ void* thread_func(void* arg) {
     free(arg);
 
     // Pin thread to a specific CPU core
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(index % sysconf(_SC_NPROCESSORS_ONLN), &cpuset);
-    if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
-        fprintf(stderr, "Warning: Could not set CPU affinity for thread %d: %s\n", index, strerror(errno));
+    if (CPU_PIN_FIRST_CPU >= 0) {
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+
+        int cpu_id =
+            CPU_PIN_FIRST_CPU +
+            (index % (sysconf(_SC_NPROCESSORS_ONLN) - CPU_PIN_FIRST_CPU));
+        CPU_SET(cpu_id, &cpuset);
+        if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
+            fprintf(stderr, "Warning: Could not set CPU affinity for thread %d: %s\n", index, strerror(errno));
+        } else {
+            printf("Thread %d pinned to cpu %d\n", index, cpu_id);
+        }
     }
 
     pthread_spinlock_t *lock = &spinlocks[index / THREADS_PER_MUTEX];
@@ -67,8 +80,56 @@ void* thread_func(void* arg) {
     return NULL;
 }
 
-int main(void) {
-    pthread_t threads[THREADS];
+void print_usage(const char *prog_name) {
+    printf("Usage: %s [options]\n", prog_name);
+    printf("Options:\n");
+    printf("  -m <MAX_THREADS>                 Total number of threads (default: 20000)\n");
+    printf("  -t <THREADS_PER_MUTEX>           Number of threads per mutex (default: 20)\n");
+    printf("  -l <LOOP_COUNT>                  Number of CPU loop iterations inside thread (default: 1000)\n");
+    printf("  -d <THREAD_SLEEP_US>             Sleep time inside thread function in microseconds (default: 1000)\n");
+    printf("  -o <OPERATIONS>                  How much operation will perform per batch(default: unlimit)\n");
+    printf("  -p <FIRST_CPU>                   Use cpu pinning starting with first cpu (default: disabled).\n");
+    printf("  -h                               Show this help message\n");
+}
+
+int main(int argc, char *argv[]) {
+    int opt;
+
+    while ((opt = getopt(argc, argv, "i:b:m:t:l:d:o:p:h")) != -1) {
+        switch (opt) {
+            case 'b':
+                THREAD_BATCH = atoi(optarg);
+                break;
+            case 'm':
+                MAX_THREADS = atoi(optarg);
+                break;
+            case 't':
+                THREADS_PER_MUTEX = atoi(optarg);
+                break;
+            case 'l':
+                LOOP_COUNT = atoi(optarg);
+                break;
+            case 'd':
+                THREAD_SLEEP_US = atoi(optarg);
+                break;
+            case 'o':
+                OPERATIONS = atoi(optarg);
+                break;
+            case 'p':
+                CPU_PIN_FIRST_CPU = atoi(optarg);
+                break;
+            case 'h':
+                print_usage(argv[0]);
+                exit(0);
+            default:
+                print_usage(argv[0]);
+                exit(1);
+        }
+    }
+
+    assert(MUTEX_COUNT < 20000);
+
+    pthread_t threads[MAX_THREADS];
 
     // Initialize spinlocks
     for (int i = 0; i < MUTEX_COUNT; i++) {
@@ -84,7 +145,7 @@ int main(void) {
     }
 
     // Launch threads
-    for (int i = 0; i < THREADS; i++) {
+    for (int i = 0; i < MAX_THREADS; i++) {
         int *arg = malloc(sizeof(int));
         if (!arg) {
             perror("malloc failed");
@@ -98,7 +159,7 @@ int main(void) {
     }
 
     // Join threads
-    for (int i = 0; i < THREADS; i++) {
+    for (int i = 0; i < MAX_THREADS; i++) {
         pthread_join(threads[i], NULL);
     }
 

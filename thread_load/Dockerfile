@@ -13,11 +13,24 @@ RUN dnf install -y \
 # Set working directory
 WORKDIR /app
 
+# Add entrypoint
+COPY entrypoint.sh .
+
+# Perf options
+ENV PERF_OPTS=""
+
+# Thread count override
+ENV THREADS=""
+
 # Copy the C source code into the container
+COPY thread_load_cpu_pin.c .
 COPY thread_load_original.c .
+COPY thread_load_optimized.c .
 
 # Compile the program
-RUN gcc -pthread -o thread_load thread_load_original.c
+RUN gcc -pthread -o thread_load_orig thread_load_original.c
+RUN gcc -pthread -o thread_load_spin thread_load_optimized.c
+RUN gcc -pthread -o thread_load_cpu_pin thread_load_cpu_pin.c
 
 # Default command to run the test loop
-CMD bash -c 'for num in `seq 5 5 100`; do perf stat -v -- ./thread_load -b $num -m $num -d 10 -o 10000000 -t 1 -l 10; sleep 5; done'
+ENTRYPOINT ["/app/entrypoint.sh"]
